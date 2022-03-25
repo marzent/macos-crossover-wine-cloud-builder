@@ -7,7 +7,7 @@ echo Wine-Crossover-MacOS
 export GITHUB_WORKSPACE=$(pwd)
 
 if [ -z "$CROSS_OVER_VERSION" ]; then
-    export CROSS_OVER_VERSION=21.1.0
+    export CROSS_OVER_VERSION=21.2.0
     echo "CROSS_OVER_VERSION not set building crossover-wine-${CROSS_OVER_VERSION}"
 fi
 
@@ -91,10 +91,11 @@ if [[ "${CROSS_OVER_VERSION}" == "20.0.1" || "${CROSS_OVER_VERSION}" == "20.0.2"
     tar -xf crossover-21.1.0.tar.gz sources/clang
 fi
 
-echo "Patch Add missing distversion.h"
-# Patch provided by Josh Dubois, CrossOver product manager, CodeWeavers.
-pushd sources/wine
-patch -p1 < ${GITHUB_WORKSPACE}/distversion.patch
+echo "Replace wine with custom version"
+rm -rf sources/wine
+pushd sources
+git clone https://github.com/marzent/winecx
+mv winecx wine
 popd
 
 
@@ -191,18 +192,18 @@ echo Configure wine64
 export CC=clang
 export CXX=clang++
 # see https://github.com/Gcenx/macOS_Wine_builds/issues/17#issuecomment-750346843
-export CROSSCFLAGS=$([[ ${CROSS_OVER_VERSION} -le 20.0.2 ]] && echo "-g -O2 -fcommon" || echo "-g -O2")
+export CROSSCFLAGS=$([[ ${CROSS_OVER_VERSION} -le 20.0.2 ]] && echo "-s -O3 -fcommon" || echo "-s -O3")
 # Xcode12 by default enables '-Werror,-Wimplicit-function-declaration' (49917738)
 # this causes wine(64) builds to fail so needs to be disabled.
 # https://developer.apple.com/documentation/xcode-release-notes/xcode-12-release-notes
-export CFLAGS="-g -O2 -Wno-implicit-function-declaration -Wno-deprecated-declarations -Wno-format"
-export LDFLAGS="-Wl,-headerpad_max_install_names"
+export CFLAGS="-O3 -Wno-implicit-function-declaration -Wno-deprecated-declarations -Wno-format"
+export LDFLAGS="-Wl,-rpath,../runtime"
 
 export GPHOTO2_CFLAGS="-I$(brew --prefix libgphoto2)/include -I$(brew --prefix libgphoto2)/include/gphoto2"
 export GPHOTO2_PORT_CFLAGS="-I$(brew --prefix libgphoto2)/include -I$(brew --prefix libgphoto2)/include/gphoto2"
-export SDL2_CFLAGS="-I$(brew --prefix sdl2)/"$([[ ${CROSS_OVER_VERSION} -ge 21.* ]] && echo "include/SDL2" || echo "include")
+export SDL2_CFLAGS="-I$(brew --prefix sdl2)/"$(echo "include/SDL2" || echo "include")
 export ac_cv_lib_soname_vulkan=""
-export ac_cv_lib_soname_MoltenVK="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
+export ac_cv_lib_soname_MoltenVK="libMoltenVK.dylib"
 
 mkdir -p ${BUILDROOT}/wine64
 pushd ${BUILDROOT}/wine64
@@ -239,16 +240,16 @@ echo Configure wine32on64
 export CC=clang
 export CXX=clang++
 # see https://github.com/Gcenx/macOS_Wine_builds/issues/17#issuecomment-750346843
-export CROSSCFLAGS=$([[ ${CROSS_OVER_VERSION} -le 20.0.2 ]] && echo "-g -O2 -fcommon" || echo "-g -O2")
+export CROSSCFLAGS=$([[ ${CROSS_OVER_VERSION} -le 20.0.2 ]] && echo "-s -O3 -fcommon" || echo "-s -O3 -Wno-error -Wno-incompatible-pointer-types")
 # Xcode12 by default enables '-Werror,-Wimplicit-function-declaration' (49917738)
 # this causes wine(64) builds to fail so needs to be disabled.
 # https://developer.apple.com/documentation/xcode-release-notes/xcode-12-release-notes
-export CFLAGS="-g -O2 -Wno-implicit-function-declaration -Wno-deprecated-declarations -Wno-format"
-export LDFLAGS="-Wl,-headerpad_max_install_names"
+export CFLAGS="-O3 -Wno-implicit-function-declaration -Wno-deprecated-declarations -Wno-format -Wno-error -Wno-incompatible-pointer-types"
+export LDFLAGS="-Wl,-rpath,../runtime"
 
 export GPHOTO2_CFLAGS="-I$(brew --prefix libgphoto2)/include -I$(brew --prefix libgphoto2)/include/gphoto2"
 export GPHOTO2_PORT_CFLAGS="-I$(brew --prefix libgphoto2)/include -I$(brew --prefix libgphoto2)/include/gphoto2"
-export SDL2_CFLAGS="-I$(brew --prefix sdl2)/"$([[ ${CROSS_OVER_VERSION} -ge 21.* ]] && echo "include/SDL2" || echo "include")
+export SDL2_CFLAGS="-I$(brew --prefix sdl2)/"$( echo "include/SDL2" || echo "include")
 
 mkdir -p ${BUILDROOT}/wine32on64
 pushd ${BUILDROOT}/wine32on64
@@ -279,7 +280,8 @@ ${WINE_CONFIGURE} \
         --without-vulkan \
         --disable-vulkan_1 \
         --disable-winevulkan \
-        --without-x
+        --without-x \
+        --without-pcap
 popd
 
 echo Build wine32on64
@@ -298,6 +300,45 @@ popd
 echo Install wine64
 pushd ${BUILDROOT}/wine64
 make install-lib DESTDIR="${INSTALLROOT}/${WINE_INSTALLATION}"
+popd
+
+
+############ Install runtime ##############
+
+echo Installing runtime
+rm -rf "${INSTALLROOT}/${WINE_INSTALLATION}/usr/local/runtime"
+cp -PR runtime "${INSTALLROOT}/${WINE_INSTALLATION}/usr/local"
+pushd "${INSTALLROOT}/${WINE_INSTALLATION}/usr/local/runtime"
+FILES="libSDL2-2.0.0.dylib
+libffi.8.dylib
+libfreetype.6.dylib
+libglib-2.0.0.dylib
+libgmodule-2.0.0.dylib
+libgmp.10.dylib
+libgnutls.30.dylib
+libgobject-2.0.0.dylib
+libgstaudio-1.0.0.dylib
+libgstbase-1.0.0.dylib
+libgstreamer-1.0.0.dylib
+libgsttag-1.0.0.dylib
+libgstvideo-1.0.0.dylib
+libhogweed.6.4.dylib
+libidn2.0.dylib
+libintl.8.dylib
+libjpeg.9.dylib
+libmpg123.0.dylib
+libnettle.8.4.dylib
+liborc-0.4.0.dylib
+libp11-kit.0.dylib
+libpcre.1.dylib
+libpng16.16.dylib
+libtasn1.6.dylib
+libunistring.2.dylib
+libusb-1.0.0.dylib"
+for f in $FILES
+do
+    cp $(echo $(find /usr/local/Cellar -name "$f") | head -n1 | cut -d " " -f1) .
+done
 popd
 
 
